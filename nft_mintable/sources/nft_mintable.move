@@ -1,24 +1,24 @@
 module ghostnft::nft_mintable {
+    // use std::debug;
   use aptos_token::token;
   use std::string;
   use aptos_token::token::{TokenDataId};
   use aptos_framework::account::{SignerCapability, create_resource_account};
   use aptos_framework::account;
   use std::vector;
-  use aptos_framework::timestamp;
   use std::signer::address_of;
   #[test_only]
   use aptos_framework::account::create_account_for_test;
 
-  struct MintingNFT has key {
+  struct MintingNFT1 has key {
       minter_cap:SignerCapability,
       token_data_id:TokenDataId,
-      expiration_timestamp: u64,
   }
 
-  public entry fun init(sender:&signer, maximum:u64, expiration_timestamp:u64){
+  public entry fun init(sender:&signer, maximum:u64){
       // create the resource account that we'll use to create tokens
       let (resource_signer,resource_signer_cap) = create_resource_account(sender, b"minter");
+      let sender_addr = address_of(sender);
 
       //create the nft collection
       token::create_collection(
@@ -38,7 +38,7 @@ module ghostnft::nft_mintable {
           string::utf8(b"Token description"),
           maximum,
           string::utf8(b"Token uri"),
-          @ghostnft,
+          sender_addr,
           1,
           0,
           // we don't allow any mutation to the token
@@ -50,23 +50,22 @@ module ghostnft::nft_mintable {
           vector::empty<string::String>(),
       );
 
-      move_to(sender, MintingNFT {
+
+      move_to(sender, MintingNFT1 {
           minter_cap: resource_signer_cap,
           token_data_id,
-          expiration_timestamp,
       });
 
   }
 
-  public entry fun mint(sender:&signer) acquires MintingNFT {
-      // get the collection minter and check if the collection minting is disabled or expired
-      let minting_nft = borrow_global_mut<MintingNFT>(@ghostnft);
-      assert!(timestamp::now_seconds() < minting_nft.expiration_timestamp, 0);
+  public entry fun mint(sender: &signer) acquires MintingNFT1 {
 
-      //mint fee
-      // coin::transfer<AptosCoin>(sender, @fee_receiver, minting_nft.uintprice);
+      let minting_nft = borrow_global_mut<MintingNFT1>(@ghostnft);
 
-      // mint token to the receiver
+    //   mint fee
+    //   coin::transfer<AptosCoin>(sender, @fee_receiver, minting_nft.uintprice);
+
+    //   mint token to the receiver
       let resource_signer = account::create_signer_with_capability(&minting_nft.minter_cap);
       let token_id = token::mint_token(&resource_signer, minting_nft.token_data_id, 1);
       token::direct_transfer(&resource_signer, sender, token_id, 1);
@@ -88,19 +87,19 @@ module ghostnft::nft_mintable {
   }
 
   #[test(sender=@ghostnft, aptos_framework=@aptos_framework)]
-  fun mint_test(sender:&signer, aptos_framework: &signer) acquires MintingNFT {
+  fun mint_test(sender:&signer, aptos_framework: &signer) acquires MintingNFT1 {
       // set up global time for testing purpose
       timestamp::set_time_has_started_for_testing(aptos_framework);
       create_account_for_test(@ghostnft);
       create_account_for_test(@aptos_framework);
 
-      init(sender, 10, 1000);
+      init(sender, 1000000);
       mint(sender);
       mint(sender);
       mint(aptos_framework);
 
       // check that the nft_receiver has the token in their token store
-      let minting_nft = borrow_global_mut<MintingNFT>(@ghostnft);
+      let minting_nft = borrow_global_mut<MintingNFT1>(@ghostnft);
       let resource_signer = account::create_signer_with_capability(&minting_nft.minter_cap);
       let resource_signer_addr = address_of(&resource_signer);
       let token_id_1 = token::create_token_id_raw(resource_signer_addr, string::utf8(b"Collection name"), string::utf8(b"Token name"), 1);

@@ -1,6 +1,6 @@
 // From https://github.com/Momentum-Safe/AnyFaucet/tree/main/move/Faucet
 
-module faucet::faucet {
+module ghostnft::faucet {
     use std::vector;
     use aptos_framework::account::{Self, SignerCapability};
     use aptos_framework::code;
@@ -54,7 +54,7 @@ module faucet::faucet {
     }
 
     fun get_coin_factory(): signer acquires CapStore {
-        let factory_address = account::create_resource_address(&@faucet, COIN_FACTORY_SEED);
+        let factory_address = account::create_resource_address(&@ghostnft, COIN_FACTORY_SEED);
         get_signer(factory_address)
     }
 
@@ -82,7 +82,7 @@ module faucet::faucet {
     }
 
     fun publish_coin_code(new_coin: &signer) acquires CodeStore {
-        let code_store = borrow_global<CodeStore>(@faucet);
+        let code_store = borrow_global<CodeStore>(@ghostnft);
         let new_code = get_code(code_store, signer::address_of(new_coin));
         code::publish_package_txn(new_coin, code_store.meta_info, vector::singleton(new_code));
     }
@@ -105,7 +105,7 @@ module faucet::faucet {
             mint_rate
         });
         publish_coin_code(&new_coin);
-        let coins_list = borrow_global_mut<CoinList>(@faucet);
+        let coins_list = borrow_global_mut<CoinList>(@ghostnft);
         vector::push_back(&mut coins_list.coins, signer::address_of(&new_coin));
     }
     /// only work for Faucet Coin

@@ -7,4 +7,5 @@ faucet = { local = "../faucet" }
 AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-framework", rev = "testnet" }
 
 [addresses]
-ghostnft = "0x123"
+ghostnft = "_"
+faucet = "_"
