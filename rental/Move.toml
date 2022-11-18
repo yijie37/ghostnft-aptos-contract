@@ -1,17 +1,13 @@
 [package]
-name = 'ghostnft'
+name = 'nft_rental_regular'
 version = '1.0.0'
 
-[dependencies.AptosFramework]
-git = 'https://github.com/aptos-labs/aptos-core.git'
-rev = 'main'
-subdir = 'aptos-move/framework/aptos-framework'
+[dependencies]
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-framework", rev = "testnet" }
+AptosToken = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-token", rev = "testnet" }
 
-[dependencies.AptosToken]
-git = 'https://github.com/aptos-labs/aptos-core.git'
-rev = 'main'
-subdir = 'aptos-move/framework/aptos-token'
-
+[addresses]
+ghostnft = "0x123"
 
 
 # [addresses]
