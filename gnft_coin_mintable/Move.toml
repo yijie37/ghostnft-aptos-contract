@@ -1,11 +1,10 @@
 [package]
-name = 'gnft_token_mintable'
+name = 'gnft_coin_mintable'
 version = '1.0.0'
 
 [dependencies]
-faucet = { local = "../faucet" }
+# faucet = { local = "../faucet" }
 AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-framework", rev = "testnet" }
 
 [addresses]
 ghostnft = "_"
-faucet = "_"
