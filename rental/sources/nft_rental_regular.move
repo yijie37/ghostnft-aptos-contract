@@ -16,7 +16,7 @@ module deployer::nft_rental_regular {
     use aptos_framework::timestamp::{Self};
     // use aptos_std::ed25519;
     use aptos_framework::coin;
-    use aptos_token::token::{Self, Token, TokenDataId, TokenId};
+    use aptos_token::token::{Self, Token, TokenId};
     // use aptos_framework::resource_account;
 
     // use ghostnft::gnft_coin_mintable::GnftCoin;
@@ -102,7 +102,6 @@ module deployer::nft_rental_regular {
         sender: &signer,
         token_name: String,
         property_version: u64,
-        end_time: u64,
         rent_per_day: u64,
         rent_token_type: u8 // currently aptos
     ) acquires PromiseCollection {
@@ -128,14 +127,14 @@ module deployer::nft_rental_regular {
         });
 
         // Guarantee
-        // coin::transfer<ghostnft::gnft_coin_mintable::GnftCoin>(
-        //     sender, 
-        //     promise_collection.platform_wallet_address, 
-        //     promise_collection.guarantee
-        // );
+        coin::transfer<ghostnft::gnft_coin_mintable::GnftCoin>(
+            sender, 
+            promise_collection.platform_wallet_address, 
+            promise_collection.guarantee
+        );
 
         // Insert user_tokens
-        let user_tokens = table::borrow_mut(promise_collection.user_tokens, sender_address);
+        let user_tokens = table::borrow_mut(&mut promise_collection.user_tokens, sender_address);
         vector::push_back(user_tokens, token_id);
 
         // Insert tokens
