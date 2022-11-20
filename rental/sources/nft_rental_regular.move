@@ -16,20 +16,30 @@ module deployer::nft_rental_regular {
     use aptos_framework::timestamp::{Self};
     // use aptos_std::ed25519;
     use aptos_framework::coin;
-    use aptos_token::token::{Self, Token, TokenId};
+    use aptos_framework::aptos_coin::AptosCoin;
+    use aptos_token::token::{Self, TokenId};
+    use aptos_token::property_map::PropertyMap;
     // use aptos_framework::resource_account;
 
     // use ghostnft::gnft_coin_mintable::GnftCoin;
 
     const SECONDS_PER_DAY: u64 = 86400;
 
+    const FEE_BASE: u64 = 10000;
+
     const RENT_TOKEN_TYPE_APTOS: u8 = 1;
 
-    const TOKEN_ALREADY_LISTED: u64 = 1;
+    const ETOKEN_ALREADY_LISTED: u64 = 1;
 
-    const BAD_TOKEN_TYPE: u64 = 2;
+    const ETOKEN_NOT_LISTED: u64 = 2;
 
-    const BAD_USER: u64 = 3;
+    const EBAD_TOKEN_TYPE: u64 = 3;
+
+    const EUSER_NOT_OWN_TOKEN: u64 = 4;
+
+    const EBAD_TENANT: u64 = 5;
+
+    const ETOKEN_ALREADY_RENTED: u64 = 6;
 
     struct Promise has store, drop {
         inital_owner: address,
@@ -39,7 +49,7 @@ module deployer::nft_rental_regular {
         tenant: Option<address>,
         rent_per_day: u64,
         start_time: u64,
-        end_time: Option<u64>,
+        end_time: u64,
         total_rent: u64,
         rent_token_type: u8,
     }
@@ -63,7 +73,7 @@ module deployer::nft_rental_regular {
         rent_fees: Table<TokenId, u64>,
         user_rented: Table<address, Table<TokenId, u64>>,
         user_tokens: Table<address, vector<TokenId>>,
-        tokens: Table<address, Token>
+        tokens_properties: Table<TokenId, PropertyMap>
     }
 
     public entry fun init(
@@ -93,11 +103,11 @@ module deployer::nft_rental_regular {
             rent_fees: table::new(),
             user_rented: table::new(),
             user_tokens: table::new(),
-            tokens: table::new()
+            tokens_properties: table::new()
         })
     }
 
-    /// List one token for renting
+    // List one token for renting
     public entry fun make_promise(
         sender: &signer,
         token_name: String,
@@ -109,9 +119,14 @@ module deployer::nft_rental_regular {
         let promise_collection = borrow_global_mut<PromiseCollection>(@deployer);
         let token_id: TokenId = get_token_id(promise_collection, token_name, property_version);
 
-        assert!(!table::contains(&promise_collection.promises, token_id), error::not_found(TOKEN_ALREADY_LISTED));
-        assert!(rent_token_type == RENT_TOKEN_TYPE_APTOS, error::invalid_argument(BAD_TOKEN_TYPE));
-        assert!(token::balance_of(sender_address, token_id) > 0, error::not_found(BAD_USER));
+        // Token is not listed
+        assert!(!table::contains(&promise_collection.promises, token_id), error::not_found(ETOKEN_ALREADY_LISTED));
+
+        // Rent token type is valid
+        assert!(rent_token_type == RENT_TOKEN_TYPE_APTOS, error::invalid_argument(EBAD_TOKEN_TYPE));
+
+        // Sender ownes the token
+        assert!(token::balance_of(sender_address, token_id) > 0, error::not_found(EUSER_NOT_OWN_TOKEN));
 
         table::upsert(&mut promise_collection.promises, token_id, Promise{
             inital_owner: sender_address,
@@ -121,7 +136,7 @@ module deployer::nft_rental_regular {
             tenant: option::none(),
             rent_per_day,
             start_time: timestamp::now_seconds(),
-            end_time: option::none(),
+            end_time: 0,
             total_rent: 0,
             rent_token_type
         });
@@ -137,9 +152,57 @@ module deployer::nft_rental_regular {
         let user_tokens = table::borrow_mut(&mut promise_collection.user_tokens, sender_address);
         vector::push_back(user_tokens, token_id);
 
-        // Insert tokens
-        // let token
-        // table::upsert(promise_collection.tokens, token_id, )
+        // Record tokens properties
+        let property_map = token::get_property_map(sender_address, token_id);
+        table::upsert(&mut promise_collection.tokens_properties, token_id, property_map);
+    }
+
+    // Tenant renting a listed token
+    public entry fun fill_promise(
+        sender: &signer,
+        token_name: String,
+        property_version: u64,
+        rent_token_type: u8
+    ) acquires PromiseCollection {
+        let sender_address = address_of(sender);
+        let promise_collection = borrow_global_mut<PromiseCollection>(@deployer);
+        let token_id: TokenId = get_token_id(promise_collection, token_name, property_version);
+
+        // Rent token type is valid
+        assert!(rent_token_type == RENT_TOKEN_TYPE_APTOS, error::invalid_argument(EBAD_TOKEN_TYPE));
+
+        // Token is listed
+        assert!(table::contains(&promise_collection.promises, token_id), error::not_found(ETOKEN_NOT_LISTED));
+
+        let promise = table::borrow_mut(&mut promise_collection.promises, token_id);
+        // Tenant is none
+        assert!(option::is_none(&promise.tenant), error::unavailable(EBAD_TENANT));
+
+        // Token is not rented
+        assert!(!promise.rented, error::invalid_state(ETOKEN_ALREADY_RENTED));
+
+        let days: u64 = (promise.end_time - timestamp::now_seconds() + SECONDS_PER_DAY - 1) / SECONDS_PER_DAY;
+        let total_rent = promise.rent_per_day * days;
+        let fee = total_rent * promise_collection.platform_fee_rate / 100;
+
+        if(rent_token_type == RENT_TOKEN_TYPE_APTOS) {
+            // Total rent to platform
+            coin::transfer<AptosCoin>(
+                sender, 
+                promise_collection.platform_wallet_address, 
+                total_rent
+            );
+
+            // Fee to treasury
+            coin::transfer<AptosCoin>(
+                sender, 
+                @ghostnft, 
+                fee
+            );
+        };
+
+        let rent_info = table::borrow_mut(&mut promise_collection.user_rented, sender_address);
+        table::add(rent_info, token_id, timestamp::now_seconds());
     }
 
     fun get_token_id(promise_collection: &PromiseCollection, token_name: String, property_version: u64): TokenId {
