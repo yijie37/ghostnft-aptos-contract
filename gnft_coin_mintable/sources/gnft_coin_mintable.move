@@ -3,11 +3,10 @@ module ghostnft::gnft_coin_mintable {
     use aptos_framework::coin;
     use aptos_framework::coin::MintCapability;
     use std::string;
-    // use faucet::faucet;
 
     const EMINT_TOO_MUCH: u64 = 1;
 
-    struct GnftCoin {}
+    struct GnftCoin has key {}
 
     struct CoinInfo has key {
         mint_rate: u64,
@@ -15,7 +14,6 @@ module ghostnft::gnft_coin_mintable {
     }
 
     fun init_module(resource: &signer) {
-        // let (name, symbol, decimals, monitor_supply, mint_rate) = faucet::get_coin_info(signer::address_of(resource));
         let decimals: u8 = 8;
         let mint_rate: u64 = 10000000000;
         let monitor_supply: bool = false;
