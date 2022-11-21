@@ -9,7 +9,7 @@ module deployer::nft_rental_regular {
     use aptos_std::table::{Self, Table};
 
     // use aptos_framework::account::{create_resource_account};
-    use aptos_framework::account::{SignerCapability, create_resource_account};
+    use aptos_framework::account::{Self, SignerCapability, create_resource_account};
 
     // use aptos_framework::account;
     // use aptos_framework::event::{Self, EventHandle};
@@ -41,6 +41,14 @@ module deployer::nft_rental_regular {
 
     const ETOKEN_ALREADY_RENTED: u64 = 6;
 
+    const ERENT_TERM_NOT_END: u64 = 7;
+
+    const ERENT_TERM_ENDED: u64 = 8;
+
+    const EPROMISE_BROKEN: u64 = 9;
+
+    const ENOT_INIT_OWNER: u64 = 10;
+
     struct Promise has store, drop {
         inital_owner: address,
         rented: bool,
@@ -52,6 +60,7 @@ module deployer::nft_rental_regular {
         end_time: u64,
         total_rent: u64,
         rent_token_type: u8,
+        current_guarantee: u64
     }
 
     struct PromiseCollection has key, store {
@@ -72,11 +81,11 @@ module deployer::nft_rental_regular {
         payments: Table<TokenId, u64>,
         rent_fees: Table<TokenId, u64>,
         user_rented: Table<address, Table<TokenId, u64>>,
-        user_tokens: Table<address, vector<TokenId>>,
+        user_tokens: Table<address, vector<u64>>,
         tokens_properties: Table<TokenId, PropertyMap>
     }
 
-    public entry fun init(
+    fun init_module(
         sender: &signer, 
         token_creator_address: address, 
         token_collection_name: String,
@@ -107,7 +116,7 @@ module deployer::nft_rental_regular {
         })
     }
 
-    // List one token for renting
+    // Lessor listing one token for renting
     public entry fun make_promise(
         sender: &signer,
         token_name: String,
@@ -120,13 +129,15 @@ module deployer::nft_rental_regular {
         let token_id: TokenId = get_token_id(promise_collection, token_name, property_version);
 
         // Token is not listed
-        assert!(!table::contains(&promise_collection.promises, token_id), error::not_found(ETOKEN_ALREADY_LISTED));
-
+        assert!(!table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
+        
         // Rent token type is valid
         assert!(rent_token_type == RENT_TOKEN_TYPE_APTOS, error::invalid_argument(EBAD_TOKEN_TYPE));
 
-        // Sender ownes the token
+        // Sender owns the token
         assert!(token::balance_of(sender_address, token_id) > 0, error::not_found(EUSER_NOT_OWN_TOKEN));
+
+        let resource_signer = account::create_signer_with_capability(&promise_collection.signer_cap);
 
         table::upsert(&mut promise_collection.promises, token_id, Promise{
             inital_owner: sender_address,
@@ -138,19 +149,20 @@ module deployer::nft_rental_regular {
             start_time: timestamp::now_seconds(),
             end_time: 0,
             total_rent: 0,
-            rent_token_type
+            rent_token_type,
+            current_guarantee: promise_collection.guarantee
         });
 
-        // Guarantee
+        // Pledge guarantee
         coin::transfer<ghostnft::gnft_coin_mintable::GnftCoin>(
             sender, 
-            promise_collection.platform_wallet_address, 
+            address_of(&resource_signer), 
             promise_collection.guarantee
         );
 
         // Insert user_tokens
         let user_tokens = table::borrow_mut(&mut promise_collection.user_tokens, sender_address);
-        vector::push_back(user_tokens, token_id);
+        vector::push_back(user_tokens, property_version);
 
         // Record tokens properties
         let property_map = token::get_property_map(sender_address, token_id);
@@ -172,7 +184,7 @@ module deployer::nft_rental_regular {
         assert!(rent_token_type == RENT_TOKEN_TYPE_APTOS, error::invalid_argument(EBAD_TOKEN_TYPE));
 
         // Token is listed
-        assert!(table::contains(&promise_collection.promises, token_id), error::not_found(ETOKEN_NOT_LISTED));
+        assert!(table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
 
         let promise = table::borrow_mut(&mut promise_collection.promises, token_id);
         // Tenant is none
@@ -181,28 +193,97 @@ module deployer::nft_rental_regular {
         // Token is not rented
         assert!(!promise.rented, error::invalid_state(ETOKEN_ALREADY_RENTED));
 
-        let days: u64 = (promise.end_time - timestamp::now_seconds() + SECONDS_PER_DAY - 1) / SECONDS_PER_DAY;
+        let resource_signer = account::create_signer_with_capability(&promise_collection.signer_cap);
+        let now_seconds = timestamp::now_seconds();
+        // Transfer rent and fee
+        let days: u64 = (promise.end_time - now_seconds + SECONDS_PER_DAY - 1) / SECONDS_PER_DAY;
         let total_rent = promise.rent_per_day * days;
         let fee = total_rent * promise_collection.platform_fee_rate / 100;
 
         if(rent_token_type == RENT_TOKEN_TYPE_APTOS) {
             // Total rent to platform
             coin::transfer<AptosCoin>(
-                sender, 
-                promise_collection.platform_wallet_address, 
+                sender,
+                address_of(&resource_signer),
                 total_rent
             );
 
             // Fee to treasury
             coin::transfer<AptosCoin>(
                 sender, 
-                @ghostnft, 
+                promise_collection.platform_wallet_address, 
                 fee
             );
         };
 
+        // Update rent user info
         let rent_info = table::borrow_mut(&mut promise_collection.user_rented, sender_address);
-        table::add(rent_info, token_id, timestamp::now_seconds());
+        table::add(rent_info, token_id, now_seconds);
+
+        // Update promise status
+        promise.rented = true;
+        promise.start_time = now_seconds;
+        promise.total_rent = total_rent;
+    }
+
+
+    public entry fun end_promise(
+        sender: &signer,
+        token_name: String,
+        property_version: u64
+    ) acquires PromiseCollection {
+        let sender_address = address_of(sender);
+        let promise_collection = borrow_global_mut<PromiseCollection>(@deployer);
+        let token_id: TokenId = get_token_id(promise_collection, token_name, property_version);
+
+        let now_seconds = timestamp::now_seconds();
+
+        // Token is listed
+        assert!(table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
+        let promise = table::borrow_mut(&mut promise_collection.promises, token_id);
+
+        // Sender owns the token
+        assert!(token::balance_of(sender_address, token_id) > 0, error::not_found(EUSER_NOT_OWN_TOKEN));
+
+        // Rent term ends
+        assert!(promise.end_time <= now_seconds, error::invalid_state(ETOKEN_NOT_LISTED));
+
+        // Promise not been broken
+        assert!(promise.kept, error::invalid_state(EPROMISE_BROKEN));
+
+        // Sender is initial owner
+        assert!(sender_address == promise.inital_owner, error::invalid_argument(ENOT_INIT_OWNER));
+
+        let promise = table::borrow_mut(&mut promise_collection.promises, token_id);
+        let resource_signer = account::create_signer_with_capability(&promise_collection.signer_cap);
+
+        // Return guarantee
+        coin::transfer<ghostnft::gnft_coin_mintable::GnftCoin>(
+            &resource_signer, 
+            sender_address,
+            promise.current_guarantee
+        );
+
+        // Transfer rent to lessor
+        if(promise.rent_token_type == RENT_TOKEN_TYPE_APTOS) {
+            coin::transfer<AptosCoin>(
+                &resource_signer,
+                sender_address,
+                promise.total_rent
+            )
+        };
+
+        // Update rent user info
+        let rent_info = table::borrow_mut(&mut promise_collection.user_rented, sender_address);
+        table::remove(rent_info, token_id);
+        // TODO: check empty
+
+        // Update user tokens
+        let user_tokens = table::borrow_mut(&mut promise_collection.user_tokens, sender_address);
+        let (exists, idx) = vector::index_of(user_tokens, &property_version);
+        if(exists) {
+            vector::remove(user_tokens, idx);
+        }
     }
 
     fun get_token_id(promise_collection: &PromiseCollection, token_name: String, property_version: u64): TokenId {
