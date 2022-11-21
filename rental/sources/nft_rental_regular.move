@@ -49,6 +49,8 @@ module deployer::nft_rental_regular {
 
     const ENOT_INIT_OWNER: u64 = 10;
 
+    const ECLAIMER_IS_OWNER: u64 = 11;
+
     struct Promise has store, drop {
         inital_owner: address,
         rented: bool,
@@ -246,7 +248,7 @@ module deployer::nft_rental_regular {
         assert!(token::balance_of(sender_address, token_id) > 0, error::not_found(EUSER_NOT_OWN_TOKEN));
 
         // Rent term ends
-        assert!(promise.end_time <= now_seconds, error::invalid_state(ETOKEN_NOT_LISTED));
+        assert!(promise.end_time <= now_seconds, error::invalid_state(ERENT_TERM_NOT_END));
 
         // Promise not been broken
         assert!(promise.kept, error::invalid_state(EPROMISE_BROKEN));
@@ -283,6 +285,67 @@ module deployer::nft_rental_regular {
         let (exists, idx) = vector::index_of(user_tokens, &property_version);
         if(exists) {
             vector::remove(user_tokens, idx);
+        }
+    }
+
+    public entry fun claim(
+        sender: &signer,
+        token_name: String,
+        property_version: u64
+    ) acquires PromiseCollection {
+        let sender_address = address_of(sender);
+        let promise_collection = borrow_global_mut<PromiseCollection>(@deployer);
+        let token_id: TokenId = get_token_id(promise_collection, token_name, property_version);
+
+        // Token is listed
+        assert!(table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
+        let promise = table::borrow_mut(&mut promise_collection.promises, token_id);
+
+        // Promise not been claimed
+        assert!(promise.kept, error::invalid_state(EPROMISE_BROKEN));
+
+        // Claimer is not init owner
+        assert!(sender_address != promise.inital_owner, error::invalid_state(ECLAIMER_IS_OWNER));
+
+        // In rent term
+        assert!(promise.end_time > timestamp::now_seconds(), error::invalid_state(ERENT_TERM_ENDED));
+
+        let resource_signer = account::create_signer_with_capability(&promise_collection.signer_cap);
+        let guarantee = promise.current_guarantee;
+        let claimer_amount = guarantee * promise_collection.claimer_percent / 100;
+        let app_amount = guarantee * promise_collection.app_percent / 100;
+        let user_amount = guarantee - claimer_amount - app_amount;
+
+        // Reward claimer
+        coin::transfer<ghostnft::gnft_coin_mintable::GnftCoin>(
+            &resource_signer, 
+            sender_address,
+            claimer_amount
+        );
+
+        // Compensation to app
+        coin::transfer<ghostnft::gnft_coin_mintable::GnftCoin>(
+            &resource_signer, 
+            promise_collection.app_wallet_address,
+            app_amount
+        );
+
+        if( !option::is_none(&promise.tenant) ) {
+            // Compensation to tenant
+            coin::transfer<ghostnft::gnft_coin_mintable::GnftCoin>(
+                &resource_signer, 
+                *option::borrow(&promise.tenant),
+                user_amount
+            );
+
+            // Return rent to tenant
+            if(promise.rent_token_type == RENT_TOKEN_TYPE_APTOS) {
+                coin::transfer<AptosCoin>(
+                    &resource_signer,
+                    *option::borrow(&promise.tenant),
+                    promise.total_rent
+                )
+            }
         }
     }
 
