@@ -7,6 +7,9 @@ module deployer::nft_rental_regular {
     use std::vector;
 
     use aptos_std::table::{Self, Table};
+    // use aptos_std::table_with_length::{Self, TableWithLength};
+    use ghostnft::iterable_table::{Self, IterableTable};
+    // use aptos_std::iterable_table::{Self, IterableTable};
 
     // use aptos_framework::account::{create_resource_account};
     use aptos_framework::account::{Self, SignerCapability, create_resource_account};
@@ -51,7 +54,7 @@ module deployer::nft_rental_regular {
 
     const ECLAIMER_IS_OWNER: u64 = 11;
 
-    struct Promise has store, drop {
+    struct Promise has store, drop, copy {
         inital_owner: address,
         rented: bool,
         kept: bool,
@@ -79,10 +82,10 @@ module deployer::nft_rental_regular {
         app_wallet_address: address,
         platform_wallet_address: address,
 
-        promises: Table<TokenId, Promise>,
+        promises: IterableTable<TokenId, Promise>,
         payments: Table<TokenId, u64>,
         rent_fees: Table<TokenId, u64>,
-        user_rented: Table<address, Table<TokenId, u64>>,
+        user_rented: Table<address, IterableTable<TokenId, u64>>,
         user_tokens: Table<address, vector<u64>>,
         tokens_properties: Table<TokenId, PropertyMap>
     }
@@ -109,7 +112,7 @@ module deployer::nft_rental_regular {
             app_wallet_address,
             platform_wallet_address,
 
-            promises: table::new(),
+            promises: iterable_table::new(),
             payments: table::new(),
             rent_fees: table::new(),
             user_rented: table::new(),
@@ -123,6 +126,7 @@ module deployer::nft_rental_regular {
         sender: &signer,
         token_name: String,
         property_version: u64,
+        end_time: u64,
         rent_per_day: u64,
         rent_token_type: u8 // currently aptos
     ) acquires PromiseCollection {
@@ -131,7 +135,7 @@ module deployer::nft_rental_regular {
         let token_id: TokenId = get_token_id(promise_collection, token_name, property_version);
 
         // Token is not listed
-        assert!(!table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
+        assert!(!iterable_table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
         
         // Rent token type is valid
         assert!(rent_token_type == RENT_TOKEN_TYPE_APTOS, error::invalid_argument(EBAD_TOKEN_TYPE));
@@ -141,7 +145,8 @@ module deployer::nft_rental_regular {
 
         let resource_signer = account::create_signer_with_capability(&promise_collection.signer_cap);
 
-        table::upsert(&mut promise_collection.promises, token_id, Promise{
+        iterable_table::remove(&mut promise_collection.promises, token_id);
+        iterable_table::add(&mut promise_collection.promises, token_id, Promise{
             inital_owner: sender_address,
             rented: false,
             kept: true,
@@ -149,7 +154,7 @@ module deployer::nft_rental_regular {
             tenant: option::none(),
             rent_per_day,
             start_time: timestamp::now_seconds(),
-            end_time: 0,
+            end_time,
             total_rent: 0,
             rent_token_type,
             current_guarantee: promise_collection.guarantee
@@ -176,19 +181,16 @@ module deployer::nft_rental_regular {
         sender: &signer,
         token_name: String,
         property_version: u64,
-        rent_token_type: u8
+        // rent_token_type: u8
     ) acquires PromiseCollection {
         let sender_address = address_of(sender);
         let promise_collection = borrow_global_mut<PromiseCollection>(@deployer);
         let token_id: TokenId = get_token_id(promise_collection, token_name, property_version);
 
-        // Rent token type is valid
-        assert!(rent_token_type == RENT_TOKEN_TYPE_APTOS, error::invalid_argument(EBAD_TOKEN_TYPE));
-
         // Token is listed
-        assert!(table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
+        assert!(iterable_table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
 
-        let promise = table::borrow_mut(&mut promise_collection.promises, token_id);
+        let promise = iterable_table::borrow_mut(&mut promise_collection.promises, token_id);
         // Tenant is none
         assert!(option::is_none(&promise.tenant), error::unavailable(EBAD_TENANT));
 
@@ -202,7 +204,7 @@ module deployer::nft_rental_regular {
         let total_rent = promise.rent_per_day * days;
         let fee = total_rent * promise_collection.platform_fee_rate / 100;
 
-        if(rent_token_type == RENT_TOKEN_TYPE_APTOS) {
+        if(promise.rent_token_type == RENT_TOKEN_TYPE_APTOS) {
             // Total rent to platform
             coin::transfer<AptosCoin>(
                 sender,
@@ -220,7 +222,7 @@ module deployer::nft_rental_regular {
 
         // Update rent user info
         let rent_info = table::borrow_mut(&mut promise_collection.user_rented, sender_address);
-        table::add(rent_info, token_id, now_seconds);
+        iterable_table::add(rent_info, token_id, now_seconds);
 
         // Update promise status
         promise.rented = true;
@@ -241,8 +243,8 @@ module deployer::nft_rental_regular {
         let now_seconds = timestamp::now_seconds();
 
         // Token is listed
-        assert!(table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
-        let promise = table::borrow_mut(&mut promise_collection.promises, token_id);
+        assert!(iterable_table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
+        let promise = iterable_table::borrow_mut(&mut promise_collection.promises, token_id);
 
         // Sender owns the token
         assert!(token::balance_of(sender_address, token_id) > 0, error::not_found(EUSER_NOT_OWN_TOKEN));
@@ -256,7 +258,7 @@ module deployer::nft_rental_regular {
         // Sender is initial owner
         assert!(sender_address == promise.inital_owner, error::invalid_argument(ENOT_INIT_OWNER));
 
-        let promise = table::borrow_mut(&mut promise_collection.promises, token_id);
+        let promise = iterable_table::borrow_mut(&mut promise_collection.promises, token_id);
         let resource_signer = account::create_signer_with_capability(&promise_collection.signer_cap);
 
         // Return guarantee
@@ -277,7 +279,7 @@ module deployer::nft_rental_regular {
 
         // Update rent user info
         let rent_info = table::borrow_mut(&mut promise_collection.user_rented, sender_address);
-        table::remove(rent_info, token_id);
+        iterable_table::remove(rent_info, token_id);
         // TODO: check empty
 
         // Update user tokens
@@ -298,8 +300,8 @@ module deployer::nft_rental_regular {
         let token_id: TokenId = get_token_id(promise_collection, token_name, property_version);
 
         // Token is listed
-        assert!(table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
-        let promise = table::borrow_mut(&mut promise_collection.promises, token_id);
+        assert!(iterable_table::contains(&promise_collection.promises, token_id), error::invalid_state(ETOKEN_NOT_LISTED));
+        let promise = iterable_table::borrow_mut(&mut promise_collection.promises, token_id);
 
         // Promise not been claimed
         assert!(promise.kept, error::invalid_state(EPROMISE_BROKEN));
@@ -348,6 +350,55 @@ module deployer::nft_rental_regular {
             }
         }
     }
+
+    public entry fun get_user_rented(user: address): Option<vector<Promise>> acquires PromiseCollection {
+        let ret_promises = vector::empty<Promise>();
+        let promise_collection = borrow_global_mut<PromiseCollection>(@deployer);
+        if(table::contains(&promise_collection.user_rented, user)) {
+            let rent_info = table::borrow_mut(&mut promise_collection.user_rented, user);
+            let key = iterable_table::head_key(rent_info);
+            let now = timestamp::now_seconds();
+            while (option::is_some(&key)) {
+                let (_, prev, next) = iterable_table::borrow_iter(rent_info, *option::borrow(&key));
+                let token_id = option::borrow(&prev);
+                let promise = iterable_table::borrow_mut(&mut promise_collection.promises, *token_id);
+                if(promise.end_time > now) {
+                    vector::push_back(&mut ret_promises, *promise);
+                };
+                key = next;
+            };
+            if(vector::length(&ret_promises) > 0) {
+                option::some(ret_promises)
+            } else {
+                option::none()
+            }
+        } else {
+            option::none()
+        }
+    }
+
+    public entry fun get_all_rented(): Option<vector<Promise>> acquires PromiseCollection {
+        let ret_promises = vector::empty<Promise>();
+        let promise_collection = borrow_global_mut<PromiseCollection>(@deployer);
+        let key = iterable_table::head_key(&promise_collection.promises);
+        let now = timestamp::now_seconds();
+
+        while (option::is_some(&key)) {
+            let (value, _, next) = iterable_table::borrow_iter(&promise_collection.promises, *option::borrow(&key));
+            let promise = *value;
+            if(promise.end_time > now) {
+                vector::push_back(&mut ret_promises, promise);
+            };
+            key = next;
+        };
+
+        if(vector::length(&ret_promises) > 0) {
+            option::some(ret_promises)
+        } else {
+            option::none()
+        }
+    }
+
 
     fun get_token_id(promise_collection: &PromiseCollection, token_name: String, property_version: u64): TokenId {
         token::create_token_id_raw(

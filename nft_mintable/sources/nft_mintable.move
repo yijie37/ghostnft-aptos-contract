@@ -2,7 +2,7 @@ module ghostnft::nft_mintable {
     // use std::debug;
   use aptos_token::token;
   use std::string;
-  use aptos_token::token::{TokenDataId};
+  use aptos_token::token::{TokenDataId, TokenStore};
   use aptos_framework::account::{SignerCapability, create_resource_account};
   use aptos_framework::account;
   use std::vector;
@@ -15,16 +15,17 @@ module ghostnft::nft_mintable {
       token_data_id:TokenDataId,
   }
 
-  public entry fun init(sender:&signer, maximum:u64){
+  fun init_module(sender: &signer){
       // create the resource account that we'll use to create tokens
-      let (resource_signer,resource_signer_cap) = create_resource_account(sender, b"minter");
+      let maximum: u64 = 10000000;
+      let (resource_signer, resource_signer_cap) = create_resource_account(sender, b"nft_mintable_minter");
       let sender_addr = address_of(sender);
 
       //create the nft collection
       token::create_collection(
           &resource_signer,
-          string::utf8(b"Collection name"),
-          string::utf8(b"Collection description"),
+          string::utf8(b"NFT collection for GhostNFT testing"),
+          string::utf8(b"NFT collection freely mintable for GhostNFT"),
           string::utf8(b"Collection uri"),
           1,
           vector<bool>[false,false,false]
@@ -33,11 +34,11 @@ module ghostnft::nft_mintable {
       // create a token data id to specify which token will be minted
       let token_data_id = token::create_tokendata(
           &resource_signer,
-          string::utf8(b"Collection name"),
-          string::utf8(b"Token name"),
-          string::utf8(b"Token description"),
+          string::utf8(b"NFT collection for GhostNFT testing"),
+          string::utf8(b"NFT for GhostNFT"),
+          string::utf8(b"NFT freely mintable for GhostNFT testing"),
           maximum,
-          string::utf8(b"Token uri"),
+          string::utf8(b"ipfs://QmeSjSinHpPnmXmspMjwiXyN6zS4E9zccariGR3jxcaWtq/"),
           sender_addr,
           1,
           0,
@@ -84,6 +85,11 @@ module ghostnft::nft_mintable {
           vector::empty<vector<u8>>(),
           vector::empty<string::String>(),
       );
+  }
+
+  public entry fun balance_of(sender: &signer) acquires TokenStore {
+      let tokens = borrow_global<TokenStore>(owner).tokens;
+      table::length(tokens)
   }
 
   #[test(sender=@ghostnft, aptos_framework=@aptos_framework)]
